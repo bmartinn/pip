@@ -213,20 +213,26 @@ class BaseDownloadProgressBar(WindowsMixin, InterruptibleMixin,
     message = "%(percent)d%%"
     suffix = "%(downloaded)s %(download_speed)s %(pretty_eta)s"
     lock = threading.Lock()
-    force_progress = True
+    force_progress = False
 
     def __init__(self, *args, **kwargs):
         super(BaseDownloadProgressBar, self).__init__(*args, **kwargs)
         self._locked = False
 
-    def writeln(self, *args, **kwargs):
+    def writeln(self, line):
+        if not line or not line.strip():
+            with LoggerPatch.log_lock:
+                return super(BaseDownloadProgressBar, self).writeln(line)
+
         # try to get the lock
         if self._locked or (self.lock and self.lock.acquire(blocking=False)):
             self._locked = True
-            return super(BaseDownloadProgressBar, self).writeln(*args, **kwargs)
+            with LoggerPatch.log_lock:
+                return super(BaseDownloadProgressBar, self).writeln(line)
 
     def finish(self):
-        ret = super(BaseDownloadProgressBar, self).finish()
+        with LoggerPatch.log_lock:
+            ret = super(BaseDownloadProgressBar, self).finish()
         if self._locked:
             if self.lock:
                 self.lock.release()
@@ -237,7 +243,7 @@ class BaseDownloadProgressBar(WindowsMixin, InterruptibleMixin,
         # If force progress bar, act as if this is tty
         if self.force_progress:
             return True
-        super(BaseDownloadProgressBar, self).is_tty()
+        return super(BaseDownloadProgressBar, self).is_tty()
 
 
 class LoggerPatch:
@@ -245,12 +251,12 @@ class LoggerPatch:
 
     @staticmethod
     def _safe_log(self, level, msg, args, **kwargs):
-        if msg and BaseDownloadProgressBar.lock and BaseDownloadProgressBar.lock.locked():
-            msg = '\n' + msg
-        if level >= 40:
-            print('\n')
-            BaseDownloadProgressBar.lock = None
         with LoggerPatch.log_lock:
+            if msg.strip() and BaseDownloadProgressBar.lock and BaseDownloadProgressBar.lock.locked():
+                msg = '\n' + msg
+            if level >= 40:
+                print('\n')
+                BaseDownloadProgressBar.lock = None
             return self._original_log(level, msg, args, **kwargs)
 
     @staticmethod
@@ -260,8 +266,6 @@ class LoggerPatch:
             Logger._original_log = Logger._log
             Logger._log = LoggerPatch._safe_log
 
-
-LoggerPatch.patch_logger()
 
 # NOTE: The "type: ignore" comments on the following classes are there to
 #       work around https://github.com/python/typing/issues/241

@@ -920,6 +920,26 @@ unstable_feature = partial(
 )  # type: Callable[..., Option]
 
 
+multi_thread = partial(
+    Option,
+    "--multi-thread",
+    dest="multi_thread",
+    action='store_true',
+    default=False,
+    help="Experimental: allow multi-threaded install",
+)  # type: Callable[..., Option]
+
+
+force_progressbar = partial(
+    Option,
+    "--force-progress-bar",
+    dest="force_progressbar",
+    action='store_true',
+    default=False,
+    help="Experimental: Force progress bar, regardless of tty",
+)  # type: Callable[..., Option]
+
+
 ##########
 # groups #
 ##########

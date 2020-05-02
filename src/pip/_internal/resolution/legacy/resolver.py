@@ -19,8 +19,7 @@ import sys
 from collections import defaultdict
 from itertools import chain
 from multiprocessing.pool import ThreadPool
-from threading import Lock, RLock, Event
-from time import time, sleep
+from threading import Event
 
 from pip._vendor.packaging import specifiers
 
@@ -113,8 +112,6 @@ class Resolver(BaseResolver):
     """
 
     _allowed_strategies = {"eager", "only-if-needed", "to-satisfy-only"}
-    _pool = None
-    _use_thread_pool = True
 
     def __init__(
         self,
@@ -129,6 +126,7 @@ class Resolver(BaseResolver):
         force_reinstall,  # type: bool
         upgrade_strategy,  # type: str
         py_version_info=None,  # type: Optional[Tuple[int, ...]]
+        use_thread_pool=False,
     ):
         # type: (...) -> None
         super(Resolver, self).__init__()
@@ -155,6 +153,11 @@ class Resolver(BaseResolver):
 
         self._discovered_dependencies = \
             defaultdict(list)  # type: DiscoveredDependencies
+        self._pool = None
+        if use_thread_pool:
+            from pip._internal.cli.progress_bars import LoggerPatch
+            LoggerPatch.patch_logger()
+            self._pool = ThreadPool()
 
     def resolve(self, root_reqs, check_supported_wheels):
         # type: (List[InstallRequirement], bool) -> RequirementSet
@@ -209,7 +212,7 @@ class Resolver(BaseResolver):
         discovered_reqs = []  # type: List[InstallRequirement]
         hash_errors = HashErrors()
 
-        if not self._use_thread_pool:
+        if self._pool is None:
             for req in chain(root_reqs, discovered_reqs):
                 try:
                     discovered_reqs.extend(self._resolve_one(requirement_set, req))
@@ -217,8 +220,6 @@ class Resolver(BaseResolver):
                     exc.req = req
                     hash_errors.append(exc)
         else:
-            if not self._pool:
-                self.__class__._pool = ThreadPool()
             processed_reqs = []
             discovered_reqs.extend(root_reqs)
             signal_event_done = Event()

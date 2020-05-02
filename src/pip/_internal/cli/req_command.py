@@ -245,7 +245,8 @@ class RequirementCommand(IndexGroupCommand):
         force_reinstall=False,               # type: bool
         upgrade_strategy="to-satisfy-only",  # type: str
         use_pep517=None,                     # type: Optional[bool]
-        py_version_info=None            # type: Optional[Tuple[int, ...]]
+        py_version_info=None,            # type: Optional[Tuple[int, ...]]
+        multi_thread=False,                 # type: bool
     ):
         # type: (...) -> BaseResolver
         """
@@ -287,6 +288,7 @@ class RequirementCommand(IndexGroupCommand):
             force_reinstall=force_reinstall,
             upgrade_strategy=upgrade_strategy,
             py_version_info=py_version_info,
+            use_thread_pool=multi_thread,
         )
 
     def get_requirements(

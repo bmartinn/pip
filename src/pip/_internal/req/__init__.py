@@ -4,6 +4,7 @@
 from __future__ import absolute_import
 
 import logging
+from multiprocessing.pool import ThreadPool
 
 from pip._internal.utils.logging import indent_log
 from pip._internal.utils.typing import MYPY_CHECK_RUNNING
@@ -37,6 +38,7 @@ def install_given_reqs(
     to_install,  # type: List[InstallRequirement]
     install_options,  # type: List[str]
     global_options=(),  # type: Sequence[str]
+    multi_thread=False,  # type: bool
     *args,  # type: Any
     **kwargs  # type: Any
 ):
@@ -47,46 +49,58 @@ def install_given_reqs(
     (to be called after having downloaded and unpacked the packages)
     """
 
+    def _single_install(a_installed, index, a_requirement, allow_raise=False):
+        if a_requirement.should_reinstall:
+            logger.info('Attempting uninstall: %s', a_requirement.name)
+            with indent_log():
+                uninstalled_pathset = a_requirement.uninstall(
+                    auto_confirm=True
+                )
+        try:
+            a_requirement.install(
+                install_options,
+                global_options,
+                *args,
+                **kwargs
+            )
+        except Exception:
+            should_rollback = (
+                    a_requirement.should_reinstall and
+                    not a_requirement.install_succeeded
+            )
+            # if install did not succeed, rollback previous uninstall
+            if should_rollback:
+                uninstalled_pathset.rollback()
+            if allow_raise:
+                raise
+        else:
+            should_commit = (
+                    a_requirement.should_reinstall and
+                    a_requirement.install_succeeded
+            )
+            if should_commit:
+                uninstalled_pathset.commit()
+            a_installed[index] = InstallationResult(a_requirement.name)
+
     if to_install:
         logger.info(
             'Installing collected packages: %s',
             ', '.join([req.name for req in to_install]),
         )
 
-    installed = []
+    # pre allocate installed package names
+    installed = [None] * len(to_install)
+
+    if multi_thread:
+        # first let's try to install in parallel, if we fail we do it by order.
+        pool = ThreadPool()
+        pool.starmap(_single_install, [(installed, i, r) for i, r in enumerate(to_install)])
+        pool.close()
+        pool.join()
 
     with indent_log():
-        for requirement in to_install:
-            if requirement.should_reinstall:
-                logger.info('Attempting uninstall: %s', requirement.name)
-                with indent_log():
-                    uninstalled_pathset = requirement.uninstall(
-                        auto_confirm=True
-                    )
-            try:
-                requirement.install(
-                    install_options,
-                    global_options,
-                    *args,
-                    **kwargs
-                )
-            except Exception:
-                should_rollback = (
-                    requirement.should_reinstall and
-                    not requirement.install_succeeded
-                )
-                # if install did not succeed, rollback previous uninstall
-                if should_rollback:
-                    uninstalled_pathset.rollback()
-                raise
-            else:
-                should_commit = (
-                    requirement.should_reinstall and
-                    requirement.install_succeeded
-                )
-                if should_commit:
-                    uninstalled_pathset.commit()
+        for i, requirement in enumerate(to_install):
+            if installed[i] is None:
+                _single_install(installed, i, requirement, allow_raise=True)
 
-            installed.append(InstallationResult(requirement.name))
-
-    return installed
+    return [i for i in installed if i is not None]
