@@ -5,6 +5,7 @@ from __future__ import absolute_import
 
 import logging
 from collections import OrderedDict
+from threading import RLock
 
 from pip._vendor.packaging.utils import canonicalize_name
 
@@ -32,6 +33,7 @@ class RequirementSet(object):
         self.check_supported_wheels = check_supported_wheels
 
         self.unnamed_requirements = []  # type: List[InstallRequirement]
+        self._lock = RLock()
 
     def __str__(self):
         # type: () -> str
@@ -88,6 +90,21 @@ class RequirementSet(object):
             the requirement is not applicable, or [install_req] if the
             requirement is applicable and has just been added.
         """
+        self._lock.acquire()
+        if not self.has_requirement(install_req.name):
+            ret = self._add_requirement(install_req, parent_req_name, extras_requested)
+        else:
+            ret = [], None
+        self._lock.release()
+        return ret
+
+    def _add_requirement(
+                self,
+                install_req,  # type: InstallRequirement
+                parent_req_name=None,  # type: Optional[str]
+                extras_requested=None  # type: Optional[Iterable[str]]
+        ):
+
         # If the markers do not match, ignore this requirement.
         if not install_req.match_markers(extras_requested):
             logger.info(

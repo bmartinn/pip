@@ -2,6 +2,8 @@ from __future__ import division
 
 import itertools
 import sys
+import threading
+from logging import Logger
 from signal import SIGINT, default_int_handler, signal
 
 from pip._vendor import six
@@ -83,6 +85,10 @@ class InterruptibleMixin(object):
             **kwargs
         )
 
+        if not isinstance(threading.current_thread(), threading._MainThread):
+            self.original_handler = None
+            return
+
         self.original_handler = signal(SIGINT, self.handle_sigint)
 
         # If signal() returns None, the previous handler was not installed from
@@ -102,7 +108,8 @@ class InterruptibleMixin(object):
         normally, or gets interrupted.
         """
         super(InterruptibleMixin, self).finish()  # type: ignore
-        signal(SIGINT, self.original_handler)
+        if self.original_handler:
+            signal(SIGINT, self.original_handler)
 
     def handle_sigint(self, signum, frame):  # type: ignore
         """
@@ -205,6 +212,56 @@ class BaseDownloadProgressBar(WindowsMixin, InterruptibleMixin,
     file = sys.stdout
     message = "%(percent)d%%"
     suffix = "%(downloaded)s %(download_speed)s %(pretty_eta)s"
+    lock = threading.Lock()
+    force_progress = True
+
+    def __init__(self, *args, **kwargs):
+        super(BaseDownloadProgressBar, self).__init__(*args, **kwargs)
+        self._locked = False
+
+    def writeln(self, *args, **kwargs):
+        # try to get the lock
+        if self._locked or (self.lock and self.lock.acquire(blocking=False)):
+            self._locked = True
+            return super(BaseDownloadProgressBar, self).writeln(*args, **kwargs)
+
+    def finish(self):
+        ret = super(BaseDownloadProgressBar, self).finish()
+        if self._locked:
+            if self.lock:
+                self.lock.release()
+            self._locked = False
+        return ret
+
+    def is_tty(self):
+        # If force progress bar, act as if this is tty
+        if self.force_progress:
+            return True
+        super(BaseDownloadProgressBar, self).is_tty()
+
+
+class LoggerPatch:
+    log_lock = threading.RLock()
+
+    @staticmethod
+    def _safe_log(self, level, msg, args, **kwargs):
+        if msg and BaseDownloadProgressBar.lock and BaseDownloadProgressBar.lock.locked():
+            msg = '\n' + msg
+        if level >= 40:
+            print('\n')
+            BaseDownloadProgressBar.lock = None
+        with LoggerPatch.log_lock:
+            return self._original_log(level, msg, args, **kwargs)
+
+    @staticmethod
+    def patch_logger():
+        # only patch Logger once
+        if not hasattr(Logger, '_original_log'):
+            Logger._original_log = Logger._log
+            Logger._log = LoggerPatch._safe_log
+
+
+LoggerPatch.patch_logger()
 
 # NOTE: The "type: ignore" comments on the following classes are there to
 #       work around https://github.com/python/typing/issues/241

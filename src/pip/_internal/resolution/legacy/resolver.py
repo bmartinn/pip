@@ -18,6 +18,9 @@ import logging
 import sys
 from collections import defaultdict
 from itertools import chain
+from multiprocessing.pool import ThreadPool
+from threading import Lock, RLock, Event
+from time import time, sleep
 
 from pip._vendor.packaging import specifiers
 
@@ -110,6 +113,8 @@ class Resolver(BaseResolver):
     """
 
     _allowed_strategies = {"eager", "only-if-needed", "to-satisfy-only"}
+    _pool = None
+    _use_thread_pool = True
 
     def __init__(
         self,
@@ -163,6 +168,34 @@ class Resolver(BaseResolver):
         possible to move the preparation to become a step separated from
         dependency resolution.
         """
+
+        def _threaded_single_resolve(
+                a_pool, a_done_event, a_req,a_requirement_set, a_discovered_reqs, a_processed_reqs,
+                a_hash_errors, a_errors):
+            try:
+                my_discovered_reqs = self._resolve_one(a_requirement_set, a_req)
+                if my_discovered_reqs and not a_hash_errors:
+                    a_discovered_reqs.extend(my_discovered_reqs)
+                    for r in my_discovered_reqs:
+                        a_pool.apply_async(_threaded_single_resolve, args=(
+                            a_pool, a_done_event, r, a_requirement_set, a_discovered_reqs, a_processed_reqs,
+                            a_hash_errors, a_errors))
+            except HashError as exc:
+                exc.req = req
+                a_hash_errors.append(exc)
+            except Exception as ex:
+                a_errors.append(ex)
+
+            # if an exception occured stop immeditaly
+            if a_hash_errors or a_errors:
+                a_done_event.set()
+            # remember to append ourselves only after we added the newly discovered packages,
+            a_processed_reqs.append(a_req)
+            # if we got here and the size of the teo lists is the same, we are done.
+            if len(a_processed_reqs) == len(a_discovered_reqs):
+                a_done_event.set()
+
+
         requirement_set = RequirementSet(
             check_supported_wheels=check_supported_wheels
         )
@@ -175,12 +208,31 @@ class Resolver(BaseResolver):
         # based on link type.
         discovered_reqs = []  # type: List[InstallRequirement]
         hash_errors = HashErrors()
-        for req in chain(requirement_set.all_requirements, discovered_reqs):
-            try:
-                discovered_reqs.extend(self._resolve_one(requirement_set, req))
-            except HashError as exc:
-                exc.req = req
-                hash_errors.append(exc)
+
+        if not self._use_thread_pool:
+            for req in chain(root_reqs, discovered_reqs):
+                try:
+                    discovered_reqs.extend(self._resolve_one(requirement_set, req))
+                except HashError as exc:
+                    exc.req = req
+                    hash_errors.append(exc)
+        else:
+            if not self._pool:
+                self.__class__._pool = ThreadPool()
+            processed_reqs = []
+            discovered_reqs.extend(root_reqs)
+            signal_event_done = Event()
+            exception_errors = list()
+            # start thread pool jobs
+            for req in discovered_reqs:
+                self._pool.apply_async(_threaded_single_resolve, args=(
+                    self._pool, signal_event_done, req, requirement_set,
+                    discovered_reqs, processed_reqs, hash_errors, exception_errors))
+            # wait until we are done
+            signal_event_done.wait()
+            # If any exceptions occurred, raise the exception from the main thread
+            if exception_errors:
+                raise exception_errors[0]
 
         if hash_errors:
             raise hash_errors
