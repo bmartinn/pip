@@ -4,7 +4,7 @@
 from __future__ import absolute_import
 
 import logging
-from multiprocessing.pool import ThreadPool
+from multiprocessing.pool import Pool
 
 from pip._internal.utils.logging import indent_log
 from pip._internal.utils.typing import MYPY_CHECK_RUNNING
@@ -38,7 +38,7 @@ def install_given_reqs(
     to_install,  # type: List[InstallRequirement]
     install_options,  # type: List[str]
     global_options=(),  # type: Sequence[str]
-    multi_thread=False,  # type: bool
+    parallel=False,  # type: bool
     *args,  # type: Any
     **kwargs  # type: Any
 ):
@@ -49,39 +49,6 @@ def install_given_reqs(
     (to be called after having downloaded and unpacked the packages)
     """
 
-    def _single_install(a_installed, index, a_requirement, allow_raise=False):
-        if a_requirement.should_reinstall:
-            logger.info('Attempting uninstall: %s', a_requirement.name)
-            with indent_log():
-                uninstalled_pathset = a_requirement.uninstall(
-                    auto_confirm=True
-                )
-        try:
-            a_requirement.install(
-                install_options,
-                global_options,
-                *args,
-                **kwargs
-            )
-        except Exception:
-            should_rollback = (
-                    a_requirement.should_reinstall and
-                    not a_requirement.install_succeeded
-            )
-            # if install did not succeed, rollback previous uninstall
-            if should_rollback:
-                uninstalled_pathset.rollback()
-            if allow_raise:
-                raise
-        else:
-            should_commit = (
-                    a_requirement.should_reinstall and
-                    a_requirement.install_succeeded
-            )
-            if should_commit:
-                uninstalled_pathset.commit()
-            a_installed[index] = InstallationResult(a_requirement.name)
-
     if to_install:
         logger.info(
             'Installing collected packages: %s',
@@ -90,17 +57,58 @@ def install_given_reqs(
 
     # pre allocate installed package names
     installed = [None] * len(to_install)
+    install_args = [install_options, global_options, args, kwargs]
 
-    if multi_thread:
+    if parallel:
         # first let's try to install in parallel, if we fail we do it by order.
-        pool = ThreadPool()
-        pool.starmap(_single_install, [(installed, i, r) for i, r in enumerate(to_install)])
+        pool = Pool()
+        try:
+            installed = pool.starmap(__single_install, [(install_args, r) for r in to_install])
+        except:
+            # we will reinstall sequentially
+            pass
         pool.close()
         pool.join()
 
     with indent_log():
         for i, requirement in enumerate(to_install):
             if installed[i] is None:
-                _single_install(installed, i, requirement, allow_raise=True)
+                installed[i] = __single_install(install_args, requirement, allow_raise=True)
 
     return [i for i in installed if i is not None]
+
+
+def __single_install(args, a_requirement, allow_raise=False):
+    if a_requirement.should_reinstall:
+        logger.info('Attempting uninstall: %s', a_requirement.name)
+        with indent_log():
+            uninstalled_pathset = a_requirement.uninstall(
+                auto_confirm=True
+            )
+    try:
+        a_requirement.install(
+            args[0],   # install_options,
+            args[1],   # global_options,
+            *args[2],  # *args,
+            **args[3]  # **kwargs
+        )
+    except Exception:
+        should_rollback = (
+                a_requirement.should_reinstall and
+                not a_requirement.install_succeeded
+        )
+        # if install did not succeed, rollback previous uninstall
+        if should_rollback:
+            uninstalled_pathset.rollback()
+        if allow_raise:
+            raise
+    else:
+        should_commit = (
+                a_requirement.should_reinstall and
+                a_requirement.install_succeeded
+        )
+        if should_commit:
+            uninstalled_pathset.commit()
+        return InstallationResult(a_requirement.name)
+
+    return None

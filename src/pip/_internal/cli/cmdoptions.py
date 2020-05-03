@@ -920,13 +920,13 @@ unstable_feature = partial(
 )  # type: Callable[..., Option]
 
 
-multi_thread = partial(
+parallel = partial(
     Option,
-    "--multi-thread",
-    dest="multi_thread",
+    "--parallel",
+    dest="parallel",
     action='store_true',
     default=False,
-    help="Experimental: allow multi-threaded install",
+    help="Experimental: allow parallel multi-threaded install",
 )  # type: Callable[..., Option]
 
 

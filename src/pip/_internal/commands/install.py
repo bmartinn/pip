@@ -226,7 +226,7 @@ class InstallCommand(RequirementCommand):
         cmd_opts.add_option(cmdoptions.require_hashes())
         cmd_opts.add_option(cmdoptions.progress_bar())
 
-        cmd_opts.add_option(cmdoptions.multi_thread())
+        cmd_opts.add_option(cmdoptions.parallel())
         cmd_opts.add_option(cmdoptions.force_progressbar())
 
         index_opts = cmdoptions.make_option_group(
@@ -329,7 +329,7 @@ class InstallCommand(RequirementCommand):
                 force_reinstall=options.force_reinstall,
                 upgrade_strategy=upgrade_strategy,
                 use_pep517=options.use_pep517,
-                multi_thread=options.multi_thread,
+                parallel=options.parallel,
             )
 
             self.trace_basic_info(finder)
@@ -404,7 +404,7 @@ class InstallCommand(RequirementCommand):
                 to_install,
                 install_options,
                 global_options,
-                multi_thread=options.multi_thread,
+                parallel=options.parallel,
                 root=options.root_path,
                 home=target_temp_dir_path,
                 prefix=options.prefix_path,

@@ -108,9 +108,9 @@ class CachedZipFile(zipfile.ZipFile):
 
     def __init__(self,  file, mode="r", *args, **kwargs):
         if mode != "r" or not isinstance(file, str) or not self._temp_cached_unpacked_zip.get(os.path.realpath(file)):
-            super(CachedZipFile, self).__init__(file, mode, *args, **kwargs)
             self._initialized = True
             self._tmp_cached_dir = None
+            super(CachedZipFile, self).__init__(file, mode, *args, **kwargs)
         else:
             self._args = [file, mode] + list(args)
             self._kwargs = kwargs
@@ -119,7 +119,7 @@ class CachedZipFile(zipfile.ZipFile):
             self._tmp_cached_dir = self._temp_cached_unpacked_zip.get(os.path.realpath(file))
 
     def get_temp_cache_folder(self):
-        if os.path.isdir(self._tmp_cached_dir):
+        if self._tmp_cached_dir and os.path.isdir(self._tmp_cached_dir):
             return self._tmp_cached_dir
         return None
 
