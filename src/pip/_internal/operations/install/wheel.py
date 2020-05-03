@@ -33,7 +33,7 @@ from pip._internal.utils.filesystem import adjacent_tmp_file, replace
 from pip._internal.utils.misc import captured_stdout, ensure_dir, hash_file
 from pip._internal.utils.temp_dir import TempDirectory
 from pip._internal.utils.typing import MYPY_CHECK_RUNNING
-from pip._internal.utils.unpacking import current_umask, unpack_file
+from pip._internal.utils.unpacking import current_umask, unpack_file, CachedZipFile
 from pip._internal.utils.wheel import parse_wheel
 
 if MYPY_CHECK_RUNNING:
@@ -617,11 +617,16 @@ def install_wheel(
     # type: (...) -> None
     with TempDirectory(
         path=_temp_dir_for_testing, kind="unpacked-wheel"
-    ) as unpacked_dir, ZipFile(wheel_path, allowZip64=True) as z:
-        unpack_file(wheel_path, unpacked_dir.path)
+    ) as unpacked_dir, CachedZipFile(wheel_path, allowZip64=True) as z:
+        # check if we have it already unpacked
+        path = z.get_temp_cache_folder()
+        if not path:
+            path = unpacked_dir.path
+            unpack_file(wheel_path, path)
+
         install_unpacked_wheel(
             name=name,
-            wheeldir=unpacked_dir.path,
+            wheeldir=path,
             wheel_zip=z,
             scheme=scheme,
             req_description=req_description,

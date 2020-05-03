@@ -13,6 +13,7 @@ import shutil
 import stat
 import tarfile
 import zipfile
+from glob import glob
 
 from pip._internal.exceptions import InstallationError
 from pip._internal.utils.filetypes import (
@@ -98,6 +99,120 @@ def is_within_directory(directory, target):
     return prefix == abs_directory
 
 
+class CachedZipFile(zipfile.ZipFile):
+    _temp_cached_unpacked_zip = {}
+
+    @classmethod
+    def update_temp_cache_folder(cls, zip_file_name, temp_cached_folder):
+        cls._temp_cached_unpacked_zip[str(zip_file_name)] = str(temp_cached_folder)
+
+    def __init__(self,  file, mode="r", *args, **kwargs):
+        if mode != "r" or not isinstance(file, str) or not self._temp_cached_unpacked_zip.get(os.path.realpath(file)):
+            super(CachedZipFile, self).__init__(file, mode, *args, **kwargs)
+            self._initialized = True
+            self._tmp_cached_dir = None
+        else:
+            self._args = [file, mode] + list(args)
+            self._kwargs = kwargs
+            self._initialized = False
+            self._name_list = None
+            self._tmp_cached_dir = self._temp_cached_unpacked_zip.get(os.path.realpath(file))
+
+    def get_temp_cache_folder(self):
+        if os.path.isdir(self._tmp_cached_dir):
+            return self._tmp_cached_dir
+        return None
+
+    def _init(self):
+        if not self._initialized:
+            self._initialized = True
+            super(CachedZipFile, self).__init__(*self._args, **self._kwargs)
+
+    def _RealGetContents(self):
+        self._init()
+        return super(CachedZipFile, self)._RealGetContents()
+
+    def namelist(self):
+        if not self._initialized and self._tmp_cached_dir and os.path.isdir(self._tmp_cached_dir):
+            if self._name_list is None:
+                self._name_list = [os.path.relpath(f, self._tmp_cached_dir).replace(os.sep, '/')
+                                   for f in glob(os.path.join(self._tmp_cached_dir, '**'), recursive=True)]
+                self._name_list = [n for n in self._name_list if n != '.']
+            return self._name_list
+
+        self._init()
+        return super(CachedZipFile, self).namelist()
+
+    def infolist(self):
+        self._init()
+        return super(CachedZipFile, self).infolist()
+
+    def printdir(self, file=None):
+        self._init()
+        return super(CachedZipFile, self).printdir(file)
+
+    def testzip(self):
+        self._init()
+        return super(CachedZipFile, self).testzip()
+
+    def getinfo(self, name):
+        self._init()
+        return super(CachedZipFile, self).getinfo(name)
+
+    def setpassword(self, pwd):
+        self._init()
+        return super(CachedZipFile, self).setpassword(pwd)
+
+    @property
+    def comment(self):
+        self._init()
+        return self._comment
+
+    @comment.setter
+    def comment(self, comment):
+        self._init()
+        super(CachedZipFile, self).comment(comment)
+
+    def read(self, name, pwd=None):
+        if not self._initialized and self._tmp_cached_dir and os.path.isdir(self._tmp_cached_dir):
+            try:
+                filename = os.path.join(self._tmp_cached_dir, name.replace('/', os.sep))
+                if os.path.isfile(filename):
+                    with open(filename, 'r') as f:
+                        return f.read()
+            except Exception:
+                pass
+
+        self._init()
+        return super(CachedZipFile, self).read(name, pwd)
+
+    def open(self, name, *args, **kwargs):
+        self._init()
+        return super(CachedZipFile, self).open(name, *args, **kwargs)
+
+    def extract(self, member, path=None, pwd=None):
+        self._init()
+        return super(CachedZipFile, self).extract(member, path, pwd)
+
+    def extractall(self, path=None, members=None, pwd=None):
+        self._init()
+        return super(CachedZipFile, self).extractall(path, members, pwd)
+
+    def write(self, filename, arcname=None, compress_type=None):
+        self._init()
+        return super(CachedZipFile, self).write(filename, arcname, compress_type)
+
+    def writestr(self, zinfo_or_arcname, data, compress_type=None):
+        self._init()
+        return super(CachedZipFile, self).writestr(zinfo_or_arcname, data, compress_type)
+
+    def close(self):
+        if not self._initialized:
+            return
+        self._init()
+        return super(CachedZipFile, self).close()
+
+
 def unzip_file(filename, location, flatten=True):
     # type: (str, str, bool) -> None
     """
@@ -148,6 +263,8 @@ def unzip_file(filename, location, flatten=True):
                         os.chmod(fn, (0o777 - current_umask() | 0o111))
     finally:
         zipfp.close()
+
+    CachedZipFile.update_temp_cache_folder(filename, location)
 
 
 def untar_file(filename, location):

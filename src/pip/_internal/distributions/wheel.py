@@ -2,6 +2,7 @@ from zipfile import ZipFile
 
 from pip._internal.distributions.base import AbstractDistribution
 from pip._internal.utils.typing import MYPY_CHECK_RUNNING
+from pip._internal.utils.unpacking import CachedZipFile
 from pip._internal.utils.wheel import pkg_resources_distribution_for_wheel
 
 if MYPY_CHECK_RUNNING:
@@ -26,7 +27,7 @@ class WheelDistribution(AbstractDistribution):
         # Wheels are never unnamed.
         assert self.req.name
 
-        with ZipFile(self.req.local_file_path, allowZip64=True) as z:
+        with CachedZipFile(self.req.local_file_path, allowZip64=True) as z:
             return pkg_resources_distribution_for_wheel(
                 z, self.req.name, self.req.local_file_path
             )
