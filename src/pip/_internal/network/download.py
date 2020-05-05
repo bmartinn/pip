@@ -182,6 +182,8 @@ class Downloader(object):
         # type: (...) -> None
         self._session = session
         self._progress_bar = progress_bar
+        # create a single instance for the signal handler
+        DownloadProgressProvider(self._progress_bar)
 
     def __call__(self, link):
         # type: (Link) -> Download
