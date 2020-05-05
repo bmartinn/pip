@@ -126,7 +126,7 @@ class Resolver(BaseResolver):
         force_reinstall,  # type: bool
         upgrade_strategy,  # type: str
         py_version_info=None,  # type: Optional[Tuple[int, ...]]
-        use_thread_pool=False,
+        use_thread_pool=False,  # type: bool
     ):
         # type: (...) -> None
         super(Resolver, self).__init__()
