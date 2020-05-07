@@ -135,9 +135,13 @@ class CachedZipFile(zipfile.ZipFile):
     def namelist(self):
         if not self._initialized and self._tmp_cached_dir and os.path.isdir(self._tmp_cached_dir):
             if self._name_list is None:
-                self._name_list = [os.path.relpath(f, self._tmp_cached_dir).replace(os.sep, '/')
-                                   for f in glob(os.path.join(self._tmp_cached_dir, '**'), recursive=True)]
-                self._name_list = [n for n in self._name_list if n != '.']
+                self._name_list = []
+                for root, subdir, files in os.walk(self._tmp_cached_dir):
+                    prefix = os.path.relpath(root, self._tmp_cached_dir)
+                    if prefix == '.':
+                        prefix = ''
+                    self._name_list.extend([os.path.join(prefix, d).replace(os.sep, '/') for d in subdir+files])
+
             return self._name_list
 
         self._init()
