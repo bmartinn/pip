@@ -18,8 +18,6 @@ import logging
 import sys
 from collections import defaultdict
 from itertools import chain
-from multiprocessing.pool import ThreadPool
-from threading import Event
 
 from pip._vendor.packaging import specifiers
 
@@ -40,6 +38,12 @@ from pip._internal.utils.packaging import (
     get_requires_python,
 )
 from pip._internal.utils.typing import MYPY_CHECK_RUNNING
+
+try:
+    from multiprocessing.pool import ThreadPool
+    from threading import Event
+except ImportError:  # Platform-specific: No multiprocessing available
+    ThreadPool = Event = None
 
 if MYPY_CHECK_RUNNING:
     from typing import DefaultDict, List, Optional, Set, Tuple
@@ -154,7 +158,7 @@ class Resolver(BaseResolver):
         self._discovered_dependencies = \
             defaultdict(list)  # type: DiscoveredDependencies
         self._pool = None
-        if use_thread_pool:
+        if use_thread_pool and ThreadPool is not None:
             from pip._internal.cli.progress_bars import LoggerPatch
             LoggerPatch.patch_logger()
             self._pool = ThreadPool()
@@ -230,7 +234,12 @@ class Resolver(BaseResolver):
                     self._pool, signal_event_done, req, requirement_set,
                     discovered_reqs, processed_reqs, hash_errors, exception_errors))
             # wait until we are done
-            signal_event_done.wait()
+            try:
+                # python 2.7 timeout=None will not catch KeyboardInterrupt
+                signal_event_done.wait(timeout=999999)
+            except (KeyboardInterrupt, SystemExit):
+                self._pool.terminate()
+                raise
             # If any exceptions occurred, raise the exception from the main thread
             if exception_errors:
                 raise exception_errors[0]

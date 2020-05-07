@@ -4,7 +4,6 @@
 from __future__ import absolute_import
 
 import logging
-from multiprocessing.pool import Pool
 
 from pip._internal.utils.logging import indent_log
 from pip._internal.utils.typing import MYPY_CHECK_RUNNING
@@ -12,6 +11,11 @@ from pip._internal.utils.typing import MYPY_CHECK_RUNNING
 from .req_file import parse_requirements
 from .req_install import InstallRequirement
 from .req_set import RequirementSet
+
+try:
+    from multiprocessing.pool import Pool
+except ImportError:  # Platform-specific: No multiprocessing available
+    Pool = None
 
 if MYPY_CHECK_RUNNING:
     from typing import Any, List, Sequence
@@ -59,12 +63,17 @@ def install_given_reqs(
     installed = [None] * len(to_install)
     install_args = [install_options, global_options, args, kwargs]
 
-    if parallel:
+    if parallel and Pool is not None:
         # first let's try to install in parallel, if we fail we do it by order.
         pool = Pool()
         try:
-            installed = pool.starmap(__single_install, [(install_args, r) for r in to_install])
-        except:
+            pool_result = pool.starmap_async(__single_install, [(install_args, r) for r in to_install])
+            # python 2.7 timeout=None will not catch KeyboardInterrupt
+            installed = pool_result.get(timeout=999999)
+        except (KeyboardInterrupt, SystemExit):
+            pool.terminate()
+            raise
+        except Exception:
             # we will reinstall sequentially
             pass
         pool.close()

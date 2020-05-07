@@ -2,7 +2,6 @@ from __future__ import division
 
 import itertools
 import sys
-import threading
 from logging import Logger
 from signal import SIGINT, default_int_handler, signal
 
@@ -14,6 +13,28 @@ from pip._internal.utils.compat import WINDOWS
 from pip._internal.utils.logging import get_indentation
 from pip._internal.utils.misc import format_size
 from pip._internal.utils.typing import MYPY_CHECK_RUNNING
+
+try:
+    from threading import RLock, Lock, current_thread, _MainThread
+except ImportError:  # Platform-specific: No threads available
+    class Lock:
+        def __enter__(self):
+            pass
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            pass
+
+        def locked(self):
+            return False
+
+        def acquire(self, *_, **__):
+            return False
+
+        def release(self, *_, **__):
+            return False
+
+    RLock = Lock
+    current_thread = _MainThread = None
 
 if MYPY_CHECK_RUNNING:
     from typing import Any, Dict, List
@@ -84,8 +105,9 @@ class InterruptibleMixin(object):
             *args,
             **kwargs
         )
+        self._finished = False
 
-        if not isinstance(threading.current_thread(), threading._MainThread):
+        if current_thread is not None and not isinstance(current_thread(), _MainThread):
             self.original_handler = None
             return
 
@@ -98,8 +120,6 @@ class InterruptibleMixin(object):
         # just raises KeyboardInterrupt.
         if self.original_handler is None:
             self.original_handler = default_int_handler
-
-        self._finished = False
 
     def finish(self):
         # type: () -> None
@@ -122,8 +142,10 @@ class InterruptibleMixin(object):
         This handler should only be in place while the progress display is
         active.
         """
+        original_handler = self.original_handler
         self.finish()
-        self.original_handler(signum, frame)
+        if original_handler:
+            original_handler(signum, frame)
 
     def __del__(self):
         # if we haven't called finish yet, we should
@@ -221,7 +243,7 @@ class BaseDownloadProgressBar(WindowsMixin, InterruptibleMixin,
     file = sys.stdout
     message = "%(percent)d%%"
     suffix = "%(downloaded)s %(download_speed)s %(pretty_eta)s"
-    lock = threading.Lock()
+    lock = Lock()
     force_progress = False
 
     def __init__(self, *args, **kwargs):
@@ -238,7 +260,7 @@ class BaseDownloadProgressBar(WindowsMixin, InterruptibleMixin,
                 return super(BaseDownloadProgressBar, self).writeln(line)
 
         # try to get the lock
-        if self._locked or (self.lock and self.lock.acquire(blocking=False)):
+        if self._locked or (self.lock and self.lock.acquire(False)):
             self._locked = True
             with LoggerPatch.log_lock:
                 return super(BaseDownloadProgressBar, self).writeln(line)
@@ -262,9 +284,16 @@ class BaseDownloadProgressBar(WindowsMixin, InterruptibleMixin,
             return True
         return super(BaseDownloadProgressBar, self).is_tty()
 
+    def __del__(self):
+        if self._locked:
+            if self.lock:
+                self.lock.release()
+            self._locked = False
+        super(BaseDownloadProgressBar, self).__del__()
+
 
 class LoggerPatch:
-    log_lock = threading.RLock()
+    log_lock = RLock()
 
     @staticmethod
     def _safe_log(self, level, msg, args, **kwargs):

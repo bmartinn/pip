@@ -1,10 +1,14 @@
 import collections
 from copy import deepcopy, copy
-from multiprocessing.pool import ThreadPool
-from threading import Event, RLock
 
 from .providers import AbstractResolver
 from .structs import DirectedGraph
+
+try:
+    from multiprocessing.pool import ThreadPool
+    from threading import Event, RLock
+except ImportError: # Platform-specific: No multiprocessing available
+    Event = RLock = ThreadPool = None
 
 
 RequirementInformation = collections.namedtuple(
@@ -192,7 +196,7 @@ class BackgroundResolutions(object):
 
         unsatisfied_criterion_items = [
             item
-            for item in self._resolution.state.criteria.items()
+            for item in list(self._resolution.state.criteria.items())
             if not self._resolution._is_current_pin_satisfying(*item)
         ]
 
@@ -249,6 +253,9 @@ class Resolution(object):
         self._r = reporter
         self._states = []
         self._background_processing = background_processing
+        if self._background_processing:
+            from pip._internal.cli.progress_bars import LoggerPatch
+            LoggerPatch.patch_logger()
 
     @property
     def state(self):
@@ -323,7 +330,6 @@ class Resolution(object):
             # Put newly-pinned candidate at the end. This is essential because
             # backtracking looks at this mapping to get the last pin.
             self._r.pinning(candidate)
-            self.state.mapping.pop(name, None)
             self.state.mapping[name] = candidate
             self.state.criteria.update(criteria)
 
@@ -382,8 +388,14 @@ class Resolution(object):
                 return name, crit
 
             pool = ThreadPool()
-            name_crit_pairs = [
-                (name, crit) for name, crit in pool.map(_single_merge, requirements) if name is not None]
+            pool_result = pool.map_async(_single_merge, requirements)
+            try:
+                # python 2.7 timeout=None will not catch KeyboardInterrupt
+                name_crit_pairs = pool_result.get(timeout=999999)
+            except (KeyboardInterrupt, SystemExit):
+                pool.terminate()
+                raise
+            name_crit_pairs = [(name, crit) for name, crit in name_crit_pairs if name is not None]
             pool.close()
             pool.join()
             if exceptions:
