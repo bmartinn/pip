@@ -99,6 +99,8 @@ class InterruptibleMixin(object):
         if self.original_handler is None:
             self.original_handler = default_int_handler
 
+        self._finished = False
+
     def finish(self):
         # type: () -> None
         """
@@ -107,9 +109,11 @@ class InterruptibleMixin(object):
         This should happen regardless of whether the progress display finishes
         normally, or gets interrupted.
         """
+        self._finished = True
         super(InterruptibleMixin, self).finish()  # type: ignore
         if self.original_handler:
             signal(SIGINT, self.original_handler)
+            self.original_handler = None
 
     def handle_sigint(self, signum, frame):  # type: ignore
         """
@@ -120,6 +124,11 @@ class InterruptibleMixin(object):
         """
         self.finish()
         self.original_handler(signum, frame)
+
+    def __del__(self):
+        # if we haven't called finish yet, we should
+        if not self._finished:
+            super(InterruptibleMixin, self).finish()
 
 
 class SilentBar(Bar):
@@ -218,8 +227,12 @@ class BaseDownloadProgressBar(WindowsMixin, InterruptibleMixin,
     def __init__(self, *args, **kwargs):
         super(BaseDownloadProgressBar, self).__init__(*args, **kwargs)
         self._locked = False
+        self._force_line = False
 
     def writeln(self, line):
+        if self._force_line:
+            return super(BaseDownloadProgressBar, self).writeln(line)
+
         if not line or not line.strip():
             with LoggerPatch.log_lock:
                 return super(BaseDownloadProgressBar, self).writeln(line)
@@ -232,6 +245,10 @@ class BaseDownloadProgressBar(WindowsMixin, InterruptibleMixin,
 
     def finish(self):
         with LoggerPatch.log_lock:
+            if not self._locked and hasattr(self, 'update'):
+                self._force_line = True
+                self.update()
+                self._force_line = False
             ret = super(BaseDownloadProgressBar, self).finish()
         if self._locked:
             if self.lock:
