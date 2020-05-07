@@ -322,6 +322,14 @@ class RequirementPreparer(object):
         # type: (...) -> AbstractDistribution
         """Prepare a requirement that would be obtained from req.link
         """
+
+        # if we already have a local link that is valid, we can safely return it.
+        if req.local_file_path and os.path.isfile(req.local_file_path):
+            return make_distribution_for_install_requirement(req)
+        elif req.source_dir is not None:
+            if not os.path.isdir(req.source_dir):
+                req.source_dir = None
+
         assert req.link
         link = req.link
 
