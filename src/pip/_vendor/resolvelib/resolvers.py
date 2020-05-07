@@ -1,4 +1,7 @@
 import collections
+from copy import deepcopy, copy
+from multiprocessing.pool import ThreadPool
+from threading import Event, RLock
 
 from .providers import AbstractResolver
 from .structs import DirectedGraph
@@ -143,6 +146,97 @@ class ResolutionTooDeep(ResolutionError):
 State = collections.namedtuple("State", "mapping criteria")
 
 
+class BackgroundResolutions(object):
+    _singleton = None
+
+    def __init__(self):
+        self._resolution = None  # type: [Resolution, None]
+        self._pool = ThreadPool()
+        self._events = {}
+        self._events_lock = RLock()
+
+    def _update_resolution(self, resolution):
+        if hasattr(resolution, '_background_protection'):
+            return False
+        # kill all waiting functions,
+        self._remove_pending_tasks()
+        # update
+        if not self._resolution:
+            self._resolution = copy(resolution)
+            self._resolution._background_protection = True
+            self._resolution._states = deepcopy(resolution._states)
+
+        base = resolution.state
+        self._resolution.state.mapping.update(base.mapping.copy())
+        self._resolution.state.criteria.update(base.criteria.copy())
+        return True
+
+    def _remove_pending_tasks(self):
+        while True:
+            try:
+                self._pool._taskqueue.get_nowait()
+            except:
+                break
+
+    def process_resolution(self, resolution, skip_name=[]):
+        if not self._update_resolution(resolution):
+            return
+
+        if not self._resolution._states:
+            self._resolution._push_new_state()
+
+        # wait for on going download to end.
+        for name in skip_name:
+            if name in self._events:
+                self._events[name].wait()
+
+        unsatisfied_criterion_items = [
+            item
+            for item in self._resolution.state.criteria.items()
+            if not self._resolution._is_current_pin_satisfying(*item)
+        ]
+
+        # All criteria are accounted for. Nothing more to pin, we are done!
+        if not unsatisfied_criterion_items:
+            return
+
+        # Choose the most preferred unpinned criterion to try.
+        unsatisfied_criterion_items = sorted(
+            unsatisfied_criterion_items, key=self._resolution._get_criterion_item_preference,)
+        for name, criterion in unsatisfied_criterion_items:
+            # background processing
+            if name not in skip_name:
+                #s elf._resolution._attempt_to_pin_criterion(name, criterion)
+                self._pool.apply_async(func=self.single_resolution, args=(name, criterion))
+
+    def single_resolution(self, name, criterion):
+        if name not in self._events:
+            self._events[name] = Event()
+        else:
+            # we have to wait for it otherwise we have to parallel downloads, which is forbidden
+            self._events[name].wait()
+            with self._events_lock:
+                # if the event was cleared (not set), it means someone else got it!
+                # we need to wait for that someone, or leave.
+                if not self._events[name].is_set():
+                    return
+                self._events[name].clear()
+
+        try:
+            self._resolution._attempt_to_pin_criterion(name, criterion)
+        except Exception:
+            # this is okay, the real resolution will throw an error if it still exists
+            pass
+
+        self._events[name].set()
+
+    @classmethod
+    def get(cls):
+        if not cls._singleton:
+            cls._singleton = cls()
+        return cls._singleton
+
+
 class Resolution(object):
     """Stateful resolution object.
 
@@ -150,10 +244,11 @@ class Resolution(object):
     the resolution process, and holds the results afterwards.
     """
 
-    def __init__(self, provider, reporter):
+    def __init__(self, provider, reporter, background_processing=False):
         self._p = provider
         self._r = reporter
         self._states = []
+        self._background_processing = background_processing
 
     @property
     def state(self):
@@ -275,12 +370,32 @@ class Resolution(object):
             raise RuntimeError("already resolved")
 
         self._push_new_state()
-        for r in requirements:
-            try:
-                name, crit = self._merge_into_criterion(r, parent=None)
-            except RequirementsConflicted as e:
-                raise ResolutionImpossible(e.criterion.information)
-            self.state.criteria[name] = crit
+        if self._background_processing:
+            exceptions = []
+
+            def _single_merge(a_r):
+                try:
+                    name, crit = self._merge_into_criterion(a_r, parent=None)
+                except RequirementsConflicted as e:
+                    exceptions.append(e)
+                    return None, None
+                return name, crit
+
+            pool = ThreadPool()
+            name_crit_pairs = [
+                (name, crit) for name, crit in pool.map(_single_merge, requirements) if name is not None]
+            pool.close()
+            pool.join()
+            if exceptions:
+                raise exceptions[0]
+            self.state.criteria.update(dict(name_crit_pairs))
+        else:
+            for r in requirements:
+                try:
+                    name, crit = self._merge_into_criterion(r, parent=None)
+                except RequirementsConflicted as e:
+                    raise ResolutionImpossible(e.criterion.information)
+                self.state.criteria[name] = crit
 
         self._r.starting()
 
@@ -307,6 +422,11 @@ class Resolution(object):
                 unsatisfied_criterion_items,
                 key=self._get_criterion_item_preference,
             )
+
+            # update background download resolution
+            if self._background_processing:
+                BackgroundResolutions.get().process_resolution(self, skip_name=[name])
+
             failure_causes = self._attempt_to_pin_criterion(name, criterion)
 
             # Backtrack if pinning fails.
@@ -381,7 +501,7 @@ class Resolver(AbstractResolver):
 
     base_exception = ResolverException
 
-    def resolve(self, requirements, max_rounds=100):
+    def resolve(self, requirements, max_rounds=100, parallel_resolution=False):
         """Take a collection of constraints, spit out the resolution result.
 
         The return value is a representation to the final resolution result. It
@@ -409,6 +529,6 @@ class Resolver(AbstractResolver):
             dependency, but you can try to resolve this by increasing the
             `max_rounds` argument.
         """
-        resolution = Resolution(self.provider, self.reporter)
+        resolution = Resolution(self.provider, self.reporter, parallel_resolution)
         state = resolution.resolve(requirements, max_rounds=max_rounds)
         return _build_result(state)

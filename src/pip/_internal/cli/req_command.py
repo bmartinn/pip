@@ -274,6 +274,7 @@ class RequirementCommand(IndexGroupCommand):
                 force_reinstall=force_reinstall,
                 upgrade_strategy=upgrade_strategy,
                 py_version_info=py_version_info,
+                parallel=parallel,
             )
         import pip._internal.resolution.legacy.resolver
         return pip._internal.resolution.legacy.resolver.Resolver(

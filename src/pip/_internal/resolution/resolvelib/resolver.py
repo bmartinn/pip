@@ -45,6 +45,7 @@ class Resolver(BaseResolver):
         force_reinstall,  # type: bool
         upgrade_strategy,  # type: str
         py_version_info=None,  # type: Optional[Tuple[int, ...]]
+        parallel=False,  # type: bool
     ):
         super(Resolver, self).__init__()
         self.factory = Factory(
@@ -59,6 +60,7 @@ class Resolver(BaseResolver):
         )
         self.ignore_dependencies = ignore_dependencies
         self._result = None  # type: Optional[Result]
+        self._parallel = parallel
 
     def resolve(self, root_reqs, check_supported_wheels):
         # type: (List[InstallRequirement], bool) -> RequirementSet
@@ -95,7 +97,7 @@ class Resolver(BaseResolver):
         resolver = RLResolver(provider, reporter)
 
         try:
-            self._result = resolver.resolve(requirements)
+            self._result = resolver.resolve(requirements, parallel_resolution=self._parallel)
 
         except ResolutionImpossible as e:
             error = self.factory.get_installation_error(e)
