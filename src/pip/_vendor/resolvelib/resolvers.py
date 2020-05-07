@@ -371,43 +371,44 @@ class Resolution(object):
 
         return False
 
+    def _prepare_initial_criterions(self, requirements):
+        exceptions = []
+
+        def _single_merge(a_r, raise_exception=False):
+            try:
+                name, crit = self._merge_into_criterion(a_r, parent=None)
+            except RequirementsConflicted as e:
+                if raise_exception:
+                    raise
+                exceptions.append(e)
+                return None, None
+            return name, crit
+
+        if not self._background_processing:
+            name_criterion_pairs = [_single_merge(r, raise_exception=True) for r in requirements]
+        else:
+            pool = ThreadPool()
+            pool_result = pool.map_async(_single_merge, requirements)
+            try:
+                # python 2.7 timeout=None will not catch KeyboardInterrupt
+                name_criterion_pairs = pool_result.get(timeout=999999)
+            except (KeyboardInterrupt, SystemExit):
+                pool.terminate()
+                raise
+            pool.close()
+            pool.join()
+            if exceptions:
+                raise exceptions[0]
+
+        return dict((name, crit) for name, crit in name_criterion_pairs if name is not None)
+
     def resolve(self, requirements, max_rounds):
         if self._states:
             raise RuntimeError("already resolved")
 
         self._push_new_state()
-        if self._background_processing:
-            exceptions = []
 
-            def _single_merge(a_r):
-                try:
-                    name, crit = self._merge_into_criterion(a_r, parent=None)
-                except RequirementsConflicted as e:
-                    exceptions.append(e)
-                    return None, None
-                return name, crit
-
-            pool = ThreadPool()
-            pool_result = pool.map_async(_single_merge, requirements)
-            try:
-                # python 2.7 timeout=None will not catch KeyboardInterrupt
-                name_crit_pairs = pool_result.get(timeout=999999)
-            except (KeyboardInterrupt, SystemExit):
-                pool.terminate()
-                raise
-            name_crit_pairs = [(name, crit) for name, crit in name_crit_pairs if name is not None]
-            pool.close()
-            pool.join()
-            if exceptions:
-                raise exceptions[0]
-            self.state.criteria.update(dict(name_crit_pairs))
-        else:
-            for r in requirements:
-                try:
-                    name, crit = self._merge_into_criterion(r, parent=None)
-                except RequirementsConflicted as e:
-                    raise ResolutionImpossible(e.criterion.information)
-                self.state.criteria[name] = crit
+        self.state.criteria.update(self._prepare_initial_criterions(requirements))
 
         self._r.starting()
 
