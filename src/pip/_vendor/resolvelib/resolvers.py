@@ -160,15 +160,14 @@ class BackgroundResolutions(object):
         self._events_lock = RLock()
 
     def _update_resolution(self, resolution):
-        if hasattr(resolution, '_background_protection'):
+        if self._resolution and resolution is self._resolution:
             return False
         # kill all waiting functions,
         self._remove_pending_tasks()
         # update
         if not self._resolution:
             self._resolution = copy(resolution)
-            self._resolution._background_protection = True
-            self._resolution._states = deepcopy(resolution._states)
+            self._resolution._states = [copy(resolution.state)]
 
         base = resolution.state
         self._resolution.state.mapping.update(base.mapping.copy())
