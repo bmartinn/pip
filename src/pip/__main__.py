@@ -21,4 +21,11 @@ if __package__ == '':
 from pip._internal.cli.main import main as _main
 
 if __name__ == '__main__':
+    try:
+        # windows multiprocessing support
+        from multiprocessing import freeze_support
+        freeze_support()
+    except ImportError:
+        pass
+
     sys.exit(_main())
